@@ -18,7 +18,18 @@ go install github.com/almahoozi/clip@latest
 
 # Usage
 
-### Copy text to the clipboard
+```bash
+$ clip -h
+
+Usage: clip [options|text]
+  -d, --delete ints[=0]   Delete items from the clipboard; if n is not provided, delete the latest item, if multiple items are present delete them, negative values are interpreted as offsets from the end (default [0])
+  -D, --delete-all        Delete all items from the clipboard
+  -l, --list ints[=0,0]   List items in the clipboard; if no arguments are provided, list all items, if a single argument is provided [limit] it is used as a limit. If two arguments are provided [start] [end], they are used as the range to list items (default [0,0])
+  -p, --paste int[=0]     Paste the nth item from the clipboard; if n is not provided, paste the last item, negative values are interpreted as offsets from the end
+  -v, --version           Print version information
+```
+
+## Copy text to the clipboard
 
 ```bash
 clip "Any text you want to copy"
@@ -33,7 +44,7 @@ echo "Any text you want to copy" | clip
 Adding the same text again move the entry instead of writing it, effectively
 making it the latest entry.
 
-### Paste text from the clipboard
+## Paste text from the clipboard
 
 Paste the last copied text:
 
@@ -49,7 +60,7 @@ Or paste a specific entry by its index:
 clip -p2
 ```
 
-### Remove an entry from the clipboard history
+## Remove an entry from the clipboard history
 
 Remove the last entry:
 
@@ -71,7 +82,7 @@ Or remove multiple entries by their indices:
 clip -d2,3,5
 ```
 
-### List entries in the clipboard history
+## List entries in the clipboard history
 
 ```bash
 clip -l
@@ -89,6 +100,48 @@ Or list entries from Start(3) to End(5):
 clip -l3,5
 ```
 
+# Integrations
+
+## Neovim
+
+Yank:
+
+```lua
+vim.keymap.set("n", "<leader>y", function()
+  local text = table.concat(vim.fn.getreg('"', 1, true), "\n")
+  vim.fn.system({ "clip" }, text)
+end)
+```
+
+Paste:
+
+```lua
+vim.keymap.set("n", "<leader>p", function()
+  local text = vim.fn.systemlist("clip")
+  vim.fn.setreg('"', text)
+  vim.api.nvim_paste(table.concat(text, "\n"), true, -1)
+end)
+```
+
+## Tmux
+
+```bash
+bind-key -T copy-mode-vi y send-keys -X copy-pipe-and-cancel "clip"
+bind-key P run-shell "clip"
+```
+
+## FZF
+
+Just pipe the output of `clip -l` to FZF and search interactively:
+
+```bash
+clip -l | fzf
+```
+
+_NOTE: In the future, long entries will be truncated. We will provide an option
+to include the index in the list output, so that you can pipe the fzf output to
+`clip -p` to paste the selected entry._
+
 # Known Issues
 
 - The `clip -l` command does not currently support limiting or specifying a
@@ -102,7 +155,7 @@ clip -l3,5
 
 # Future Plans
 
-- Implement the configure a maximum number of entries in the clipboard history.
+- Configure a maximum number of entries in the clipboard history.
 - Implementing a TTL for entries, so they get removed after a certain time.
 - Implementing a size limit for the clipboard history, removing the oldest
   entries when the limit is reached.
@@ -118,6 +171,6 @@ clip -l3,5
 - Allow storing a separate clipboard history for each user, or using a shared
   clipboard history across users.
 - Allow named entries, so they can be referenced by name instead of index.
-  would persist forever, unless the user manually removes them.
+  Those would persist forever, unless the user manually removes them.
 - Allow manually setting the expiration date for entries.
 - Allow configuring the clipboard history file path.

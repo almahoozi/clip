@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -192,6 +193,23 @@ const (
 )
 
 func main() {
+	pflag.Usage = func() {
+		// Output to stderr
+		fmt.Fprintln(os.Stderr, "Usage: clip [options|text]")
+		fmt.Fprintln(os.Stderr, "Options:")
+		pflag.PrintDefaults()
+		fmt.Fprintln(os.Stderr, "\nPositional argument:")
+		fmt.Fprintln(os.Stderr, "  text: The text to add to the clipboard, if no text is provided, it will paste the last item from the clipboard.")
+		fmt.Fprintln(os.Stderr, "\nExamples:")
+		fmt.Fprintln(os.Stderr, "  clip 'Hello, World!'   # Adds 'Hello, World!' to the clipboard")
+		fmt.Fprintln(os.Stderr, "  clip 		              # Pastes the latest item from the clipboard")
+		fmt.Fprintln(os.Stderr, "  echo 'Hello, World!' | clip # Adds 'Hello, World!' to the clipboard from stdin")
+		fmt.Fprintln(os.Stderr, "  clip -p1              	# Pastes the item at index 1 from the clipboard")
+		fmt.Fprintln(os.Stderr, "  clip -d2	              # Deletes the item at index 2 from the clipboard")
+		fmt.Fprintln(os.Stderr, "  clip -D                # Deletes all items from the clipboard")
+		fmt.Fprintln(os.Stderr, "  clip -v                # Prints version information")
+	}
+
 	pflag.CommandLine.SortFlags = true
 	pflag.IntP("paste", "p", 0, "Paste the nth item from the clipboard; if n is not provided, paste the last item, negative values are interpreted as offsets from the end")
 	pflag.IntSliceP("delete", "d", []int{0}, "Delete items from the clipboard; if n is not provided, delete the latest item, if multiple items are present delete them, negative values are interpreted as offsets from the end")
@@ -224,7 +242,9 @@ func main() {
 	defer close()
 
 	if err := app.handle(f); err != nil {
-		log.Println(err.Error())
+		if !errors.Is(err, pflag.ErrHelp) {
+			log.Println(err.Error())
+		}
 		pflag.Usage()
 		close()
 		os.Exit(1)
