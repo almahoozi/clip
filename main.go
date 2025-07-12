@@ -30,7 +30,7 @@ var _ = RingBuffer[int]{}
 
 type application struct {
 	filePath string
-	Items    []Item `json:"i,omitempty"`
+	Items    []*Item `json:"i,omitempty"`
 	index    map[string]int
 }
 
@@ -107,21 +107,23 @@ type Item struct {
 }
 
 func (app *application) hash(data string) string {
+	data = strings.TrimSpace(data)
 	hash := sha1.Sum([]byte(data))
 	return base64.RawURLEncoding.EncodeToString(hash[:])
 }
 
 func (app *application) Add(data string) {
-	data = strings.TrimSpace(data)
 	hash := app.hash(data)
 
-	if idx, exists := app.index[hash]; exists {
+	if idx, exists := app.index[hash]; exists && idx == len(app.Items)-1 {
+		// Item already exists and is the latest, do nothing
+		return
+	} else if exists {
 		// Remove it and re-add it to the end
-		fmt.Printf("Item with hash %s already exists, removing it from index %d\n", hash, idx)
 		app.Remove(idx)
 	}
 
-	app.Items = append(app.Items, Item{data, hash})
+	app.Items = append(app.Items, &Item{data, hash})
 	app.index[hash] = len(app.Items) - 1
 }
 
@@ -129,7 +131,7 @@ func (app *application) Get(index int) *Item {
 	if index < 0 || index >= len(app.Items) {
 		return nil
 	}
-	return &app.Items[index]
+	return app.Items[index]
 }
 
 func (app *application) Clear() {
@@ -168,13 +170,17 @@ func (app *application) Remove(idx int) {
 	app.Items = append(app.Items[:idx], app.Items[idx+1:]...)
 }
 
-func (app *application) List() []Item {
+func (app *application) List() []*Item {
 	return app.Items
 }
 
 type Flags struct {
-	Operation     Op
-	Text          string // Positional argument for text input
+	Operation Op
+	Text      string // Positional argument for text input
+	Silent    bool   // Flag to indicate if the text should be echoed back
+	// FIX: We can't support negative indices in the flags directly, consider -P
+	// for pasting negative index. We can't use this for deletes as it takes a
+	// slice which can have mixed signs.
 	PasteIndex    int
 	DeleteIndices []int  // Slice of integers for delete indices
 	ListArgs      [2]int // Range for listing items, first and last index
@@ -202,15 +208,17 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  text: The text to add to the clipboard, if no text is provided, it will paste the last item from the clipboard.")
 		fmt.Fprintln(os.Stderr, "\nExamples:")
 		fmt.Fprintln(os.Stderr, "  clip 'Hello, World!'   # Adds 'Hello, World!' to the clipboard")
+		fmt.Fprintln(os.Stderr, "  clip -s 'Hello, World!' # Adds 'Hello, World!' to the clipboard without echoing it back")
 		fmt.Fprintln(os.Stderr, "  clip 		              # Pastes the latest item from the clipboard")
 		fmt.Fprintln(os.Stderr, "  echo 'Hello, World!' | clip # Adds 'Hello, World!' to the clipboard from stdin")
-		fmt.Fprintln(os.Stderr, "  clip -p1              	# Pastes the item at index 1 from the clipboard")
-		fmt.Fprintln(os.Stderr, "  clip -d2	              # Deletes the item at index 2 from the clipboard")
+		fmt.Fprintln(os.Stderr, "  clip -p=1              	# Pastes the item at index 1 from the clipboard")
+		fmt.Fprintln(os.Stderr, "  clip -d=2	              # Deletes the item at index 2 from the clipboard")
 		fmt.Fprintln(os.Stderr, "  clip -D                # Deletes all items from the clipboard")
 		fmt.Fprintln(os.Stderr, "  clip -v                # Prints version information")
 	}
 
 	pflag.CommandLine.SortFlags = true
+	pflag.BoolP("silent", "s", false, "Do not echo the text back to stdout after adding it to the clipboard")
 	pflag.IntP("paste", "p", 0, "Paste the nth item from the clipboard; if n is not provided, paste the last item, negative values are interpreted as offsets from the end")
 	pflag.IntSliceP("delete", "d", []int{0}, "Delete items from the clipboard; if n is not provided, delete the latest item, if multiple items are present delete them, negative values are interpreted as offsets from the end")
 	pflag.BoolP("delete-all", "D", false, "Delete all items from the clipboard")
@@ -224,16 +232,18 @@ func main() {
 	lFlag.NoOptDefVal = "0,0" // Default to listing all items if no arguments are provided
 	dFlag := pflag.Lookup("delete")
 	dFlag.NoOptDefVal = "0" // Default to deleting the latest item if no argument is provided
+	sFlag := pflag.Lookup("silent")
+	sFlag.Hidden = true // Hide the silent flag from the help output
 
 	pflag.Parse()
 
-	f, err := parse(pflag.CommandLine)
+	app := NewApplication(Config{})
+	f, err := app.parse(pflag.CommandLine)
 	if err != nil {
 		pflag.Usage()
 		os.Exit(1)
 	}
 
-	app := NewApplication(Config{})
 	close := func() {
 		if err := app.Close(); err != nil {
 			log.Printf("Error closing application: %v", err)
@@ -256,12 +266,15 @@ func (app *application) handle(flags Flags) error {
 	case OpHelp:
 		pflag.Usage()
 	case OpVersion:
-		fmt.Println(version)
+		Outln(version)
 	case OpAdd:
 		if flags.Text == "" {
 			return fmt.Errorf("no text provided to add to the clipboard")
 		}
 		app.Add(flags.Text)
+		if !flags.Silent {
+			Out(flags.Text)
+		}
 	case OpPaste:
 		if len(app.Items) == 0 {
 			return nil
@@ -276,7 +289,15 @@ func (app *application) handle(flags Flags) error {
 			return fmt.Errorf("item not found at index %d", idx)
 		}
 
-		fmt.Println(item.Data)
+		// Bring this item to the front of the list
+		// Unless it's already the latest item
+		if idx != len(app.Items)-1 {
+			app.Remove(idx)
+			app.Add(item.Data) // Re-add it to the end of the list
+		}
+
+		// TODO: Allow adding a new line if they want it
+		Out(item.Data)
 	case OpDeleteAll:
 		app.Clear()
 	case OpDelete:
@@ -310,9 +331,10 @@ func (app *application) handle(flags Flags) error {
 
 		start, end := flags.ListArgs[0], flags.ListArgs[1]
 		if start == 0 && end == 0 {
-			// List all items
-			for _, item := range app.Items {
-				fmt.Println(strings.ReplaceAll(item.Data, "\n", "\\n"))
+			// List all items (in reverse order)
+			for i := len(app.Items) - 1; i >= 0; i-- {
+				item := app.Items[i]
+				Outln(strings.ReplaceAll(item.Data, "\n", "\\n"))
 			}
 		} else {
 			// IMPLEMENT: Limit and range listing
@@ -338,9 +360,20 @@ func resolveIdx(idx int, len int) (int, error) {
 	return idx, nil
 }
 
-func parse(flagset *pflag.FlagSet) (Flags, error) {
+func (app *application) parse(flagset *pflag.FlagSet) (Flags, error) {
 	var flags Flags
 	flags.Operation = OpHelp // Default operation
+
+	emptyArg0 := true
+	if flagset.NArg() > 0 {
+		// NOTE: No need to allow empty space to be copied
+		// Instead we could utilize this to paste into an empty space in nvim.
+		emptyArg0 = strings.TrimSpace(flagset.Arg(0)) == ""
+		if !emptyArg0 {
+			// Try again but unescaped
+			emptyArg0 = strings.TrimSpace(strings.ReplaceAll(flagset.Arg(0), "\\n", "\n")) == ""
+		}
+	}
 
 	if flagset.Changed("version") {
 		v, err := flagset.GetBool("version")
@@ -391,30 +424,62 @@ func parse(flagset *pflag.FlagSet) (Flags, error) {
 		flags.Operation = OpPaste
 		paste, _ := flagset.GetInt("paste")
 		flags.PasteIndex = paste
-	} else if flagset.NArg() == 1 {
+		// NOTE: Support piping back fzf of list output
+		// Ex: `clip -l | fzf | clip -p`
+		pipeInput, err := getPipeInput()
+		if err != nil {
+			return flags, fmt.Errorf("error reading piped input: %w", err)
+		}
+
+		if pipeInput != "" {
+			// TODO: If an exact match isn't found this should do a prefix match.
+			// TODO: In the future this should take into consideration list columns;
+			// if / when we support truncating lists this will break unless we do
+			// something to prevent that, like prefix matches, or adding an idx column
+			// to the list output.
+
+			// NOTE: Since we escape newlines in the list output, let's unescape them
+			unescaped := strings.ReplaceAll(pipeInput, "\\n", "\n")
+			hash := app.hash(unescaped)
+			idx, exists := app.index[hash]
+			if !exists && pipeInput != unescaped {
+				hash = app.hash(pipeInput)
+				idx, exists = app.index[hash]
+			}
+			if !exists {
+				return flags, nil
+			}
+			if paste != 0 {
+				// WARN: This ignores that the user could have explicitly set 0
+				return flags, fmt.Errorf("piped input cannot be used when pasting an item by index")
+			}
+
+			// we need to invert the index (len - idx - 1)
+			flags.PasteIndex = len(app.Items) - idx - 1
+		}
+	} else if flagset.NArg() == 1 && !emptyArg0 {
 		flags.Operation = OpAdd
 		flags.Text = flagset.Arg(0)
+		if flagset.Changed("silent") {
+			flags.Silent = true
+		}
 	} else if flagset.NArg() > 1 {
 		log.Println("Invalid number of arguments")
 		return flags, pflag.ErrHelp
 	} else {
 		// Now this could be either a piped input to a copy, otherwise it's a paste
-		info, err := os.Stdin.Stat()
+		pipeInput, err := getPipeInput()
 		if err != nil {
-			log.Println("Error reading pipe status:", err)
 			return flags, err
 		}
-		if (info.Mode() & os.ModeCharDevice) == 0 {
-			data, err := io.ReadAll(os.Stdin)
-			if err != nil {
-				log.Println("Error reading from pipe:", err)
-				return flags, err
+
+		if pipeInput != "" {
+			flags.Operation = OpAdd
+			flags.Text = pipeInput
+			if flagset.Changed("silent") {
+				flags.Silent = true
 			}
-			if len(data) > 0 {
-				flags.Operation = OpAdd
-				flags.Text = string(data)
-			}
-		} else if flagset.NArg() == 0 {
+		} else if emptyArg0 {
 			flags.Operation = OpPaste
 		} else {
 			log.Println("Invalid operation, please provide a valid command or input")
@@ -423,4 +488,48 @@ func parse(flagset *pflag.FlagSet) (Flags, error) {
 	}
 
 	return flags, nil
+}
+
+func getPipeInput() (string, error) {
+	// Wait for out to be done / flushed
+	//if err := os.Stdout.Sync(); err != nil {
+	//return "", fmt.Errorf("error flushing stdout: %w", err)
+	//}
+
+	info, err := os.Stdin.Stat()
+	if err != nil {
+		return "", fmt.Errorf("error reading pipe status: %w", err)
+	}
+	if (info.Mode() & os.ModeCharDevice) == 0 {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return "", fmt.Errorf("error reading from pipe: %w", err)
+		}
+
+		// If trimming returns nothing, we return nothing
+		if strings.TrimSpace(string(data)) == "" {
+			return "", nil
+		}
+
+		// As a special case, if after we unescape newlines, and trim, we have
+		// nothing, we return nothing
+		if strings.TrimSpace(strings.ReplaceAll(string(data), "\\n", "\n")) == "" {
+			return "", nil
+		}
+
+		return string(data), nil
+	}
+	return "", nil // No input from pipe
+}
+
+func Out(s string) {
+	fmt.Print(s)
+}
+
+func Outf(format string, args ...any) {
+	fmt.Printf(format, args...)
+}
+
+func Outln(s string) {
+	fmt.Println(s)
 }

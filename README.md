@@ -52,12 +52,12 @@ Paste the last copied text:
 clip
 ```
 
-_this is equivalent to `clip -p` or `clip -p0`._
+_this is equivalent to `clip -p` or `clip -p=0`._
 
 Or paste a specific entry by its index:
 
 ```bash
-clip -p2
+clip -p=2
 ```
 
 ## Remove an entry from the clipboard history
@@ -68,18 +68,18 @@ Remove the last entry:
 clip -d
 ```
 
-_this is equivalent to `clip -d0`._
+_this is equivalent to `clip -d=0`._
 
 Or remove a specific entry by its index:
 
 ```bash
-clip -d2
+clip -d=2
 ```
 
 Or remove multiple entries by their indices:
 
 ```bash
-clip -d2,3,5
+clip -d=2,3,5
 ```
 
 ## List entries in the clipboard history
@@ -91,13 +91,13 @@ clip -l
 Or list LIMIT(5) entries:
 
 ```bash
-clip -l5
+clip -l=5
 ```
 
 Or list entries from Start(3) to End(5):
 
 ```bash
-clip -l3,5
+clip -l=3,5
 ```
 
 # Integrations
@@ -107,20 +107,13 @@ clip -l3,5
 Yank:
 
 ```lua
-vim.keymap.set("n", "<leader>y", function()
-  local text = table.concat(vim.fn.getreg('"', 1, true), "\n")
-  vim.fn.system({ "clip" }, text)
-end)
+vim.keymap.set("v", "<leader>y", "!clip<CR>", { desc = "Yank to clip" })
 ```
 
 Paste:
 
 ```lua
-vim.keymap.set("n", "<leader>p", function()
-  local text = vim.fn.systemlist("clip")
-  vim.fn.setreg('"', text)
-  vim.api.nvim_paste(table.concat(text, "\n"), true, -1)
-end)
+vim.keymap.set("n", "<leader>p", ":-1r !clip<CR>", { desc = "Paste from clip" })
 ```
 
 ## Tmux
@@ -136,6 +129,13 @@ Just pipe the output of `clip -l` to FZF and search interactively:
 
 ```bash
 clip -l | fzf
+```
+
+Optionally pipe the output back to `clip` with the `-p` option to paste the
+selected entry:
+
+```bash
+clip -l | fzf | clip -p
 ```
 
 _NOTE: In the future, long entries will be truncated. We will provide an option
